@@ -1,0 +1,20 @@
+<idea-plugin>
+    <id>debugToCursor</id>
+    <name>Debug to Cursor</name>
+    <vendor email="dmitry.neverov@gmail.com">me</vendor>
+
+    <idea-version since-build="223"/>
+
+    <version>1</version>
+
+    <description>
+      Provides the 'Debug to Cursor' action which restarts the current run configuration under debug,
+      and runs it until the position in the editor is reached. Doesn't work for java debugger.
+    </description>
+
+    <actions>
+        <action class="dbg.DebugToCursor" text="Debug To Cursor" icon="AllIcons.Actions.RestartDebugger"/>
+    </actions>
+
+    <depends>com.intellij.modules.lang</depends>
+</idea-plugin>

@@ -1,0 +1,18 @@
+plugins {
+    id 'org.jetbrains.intellij' version '1.12.0'
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+apply plugin: 'idea'
+apply plugin: 'org.jetbrains.intellij'
+apply plugin: 'java'
+
+intellij {
+    version = '2022.3'
+    //type = 'CL'
+    updateSinceUntilBuild = false
+}
