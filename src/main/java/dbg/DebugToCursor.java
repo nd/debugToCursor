@@ -29,7 +29,7 @@ import java.util.function.Consumer;
 
 public class DebugToCursor extends AnAction implements DumbAware {
 
-  static final Key<BreakpointManagerState> STATE_KEY = Key.create("dbg.DebugToCursor.BreakpointManagerState");
+  static final Key<DebugToCursorInfo> INFO_KEY = Key.create("dbg.DebugToCursor.info");
   static final Key<Boolean> LISTENER_KEY = Key.create("dbg.DebugToCursor.Listener");
 
   @Override
@@ -58,50 +58,59 @@ public class DebugToCursor extends AnAction implements DumbAware {
       showNotification("Cannot put a temporary breakpoint in the opened editor", NotificationType.WARNING);
       return;
     }
-    XBreakpointManagerImpl bm = (XBreakpointManagerImpl) XDebuggerManager.getInstance(project).getBreakpointManager();
-    BreakpointManagerState state = bm.saveState(new BreakpointManagerState());
-
-    ApplicationManager.getApplication().runWriteAction(() -> {
-      XBreakpointBase<?, ?, ?>[] breakpoints = bm.getAllBreakpoints();
-      bm.addLineBreakpoint(breakpointType, file.getUrl(), line, null, true);
-      for (XBreakpointBase<?, ?, ?> b : breakpoints) {
-        bm.removeBreakpoint(b);
-      }
-    });
-
+    DebugToCursorInfo info = new DebugToCursorInfo(breakpointType, file, line);
     if (project.getUserData(LISTENER_KEY) == null) {
       project.getMessageBus().connect().subscribe(XDebuggerManager.TOPIC, new XDebuggerManagerListener() {
         @Override
         public void processStarted(@NotNull XDebugProcess debugProcess) {
-          debugProcess.getSession().addSessionListener(new XDebugSessionListener() {
-            @Override
-            public void sessionStopped() {
-              restoreState(debugProcess, project);
-            }
+          ExecutionEnvironment env = ((XDebugSessionImpl) debugProcess.getSession()).getExecutionEnvironment();
+          DebugToCursorInfo info = env != null ? env.getUserData(INFO_KEY) : null;
+          if (info != null) {
+            XBreakpointManagerImpl bm = (XBreakpointManagerImpl) XDebuggerManager.getInstance(project).getBreakpointManager();
+            BreakpointManagerState state = bm.saveState(new BreakpointManagerState());
+            ApplicationManager.getApplication().runWriteAction(() -> {
+              XBreakpointBase<?, ?, ?>[] breakpoints = bm.getAllBreakpoints();
+              for (XBreakpointBase<?, ?, ?> b : breakpoints) {
+                bm.removeBreakpoint(b);
+              }
+              // temporary is false because we remove it manually by restoring the state,
+              // if we mark it temporary, platform tries to remove it on session termination
+              // and fails with exception.
+              boolean temporary = false;
+              bm.addLineBreakpoint(info.breakpointType, info.file.getUrl(), info.line, null, temporary);
+            });
 
-            @Override
-            public void sessionPaused() {
-              restoreState(debugProcess, project);
-            }
+            debugProcess.getSession().addSessionListener(new XDebugSessionListener() {
+              volatile boolean restored = false;
 
-            private void restoreState(@NotNull XDebugProcess debugProcess, @NotNull Project project) {
-              XBreakpointManagerImpl bm = (XBreakpointManagerImpl) XDebuggerManager.getInstance(project).getBreakpointManager();
-              ExecutionEnvironment env = ((XDebugSessionImpl) debugProcess.getSession()).getExecutionEnvironment();
-              BreakpointManagerState state = env != null ? env.getUserData(STATE_KEY) : null;
-              if (state != null) {
+              @Override
+              public void sessionStopped() {
+                restoreState();
+              }
+
+              @Override
+              public void sessionPaused() {
+                restoreState();
+              }
+
+              private void restoreState() {
                 ApplicationManager.getApplication().invokeLater(() -> {
-                  env.putUserData(STATE_KEY, null);
-                  bm.loadState(state);
+                  ApplicationManager.getApplication().runWriteAction(() -> {
+                    if (!restored) {
+                      bm.loadState(state);
+                      restored = true;
+                    }
+                  });
                 });
               }
-            }
-          });
+            });
+          }
         }
       });
       project.putUserData(LISTENER_KEY, true);
     }
 
-    run(project, selectedConfiguration, e.getDataContext(), state);
+    run(project, selectedConfiguration, e.getDataContext(), info);
   }
 
   public void update(@NotNull AnActionEvent e) {
@@ -154,14 +163,14 @@ public class DebugToCursor extends AnAction implements DumbAware {
   private static void run(@NotNull Project project,
                           @NotNull RunnerAndConfigurationSettings settings,
                           @NotNull DataContext dataContext,
-                          @NotNull BreakpointManagerState state) {
+                          @NotNull DebugToCursorInfo info) {
     Executor executor = getDebugExecutor();
     if (executor == null) {
       showNotification("Debug executor is not found", NotificationType.WARNING);
       return;
     }
     Consumer<ExecutionEnvironment> envSetup = RunToolbarProcessData.prepareBaseSettingCustomization(settings, env -> {
-      env.putUserData(STATE_KEY, state);
+      env.putUserData(INFO_KEY, info);
     });
     ExecutorRegistryImpl.RunnerHelper.runSubProcess(project, settings.getConfiguration(), settings, dataContext, executor, envSetup);
   }
@@ -173,5 +182,17 @@ public class DebugToCursor extends AnAction implements DumbAware {
   @Nullable
   private static Executor getDebugExecutor() {
     return ExecutorRegistry.getInstance().getExecutorById(ToolWindowId.DEBUG);
+  }
+
+  private static class DebugToCursorInfo {
+    final XLineBreakpointType<?> breakpointType;
+    final VirtualFile file;
+    final int line;
+
+    public DebugToCursorInfo(XLineBreakpointType<?> breakpointType, VirtualFile file, int line) {
+      this.breakpointType = breakpointType;
+      this.file = file;
+      this.line = line;
+    }
   }
 }
